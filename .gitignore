@@ -1,0 +1,47 @@
+# ─── IntelliJ IDEA ───────────────────────────
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# ─── Maven ───────────────────────────────────
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+
+# ─── Compiled Output ─────────────────────────
+*.class
+*.jar
+*.war
+*.ear
+
+# ─── Zip / Archives ──────────────────────────
+*.zip
+*.tar.gz
+*.rar
+
+# ─── Sensitive Config — MOST IMPORTANT ───────
+application.properties
+application-*.properties
+application.yml
+application-*.yml
+*.env
+.env
+
+# ─── Reports Output ──────────────────────────
+reports/
+
+# ─── Logs ────────────────────────────────────
+*.log
+logs/
+
+# ─── OS Files ────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Docker local overrides ──────────────────
+docker-compose.override.yml
