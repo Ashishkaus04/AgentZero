@@ -23,7 +23,8 @@ public class DockerManager {
     private final Map<String, String> runningContainers = new HashMap<>();
 
     public DockerManager(@Value("${agentzero.docker.host}") String dockerHost) {
-        DefaultDockerClientConfig config = DefaultDockerClientConfig.createDefaultConfigBuilder()
+        DefaultDockerClientConfig config = DefaultDockerClientConfig
+                .createDefaultConfigBuilder()
                 .withDockerHost(dockerHost)
                 .build();
 
@@ -38,66 +39,47 @@ public class DockerManager {
                 .withDockerHttpClient(httpClient)
                 .build();
 
-        log.info("DockerManager initialized, host={}", dockerHost);
+        log.info("DockerManager initialized: {}", dockerHost);
     }
 
-    /**
-     * Start a vulnerable target container
-     * Returns the container's IP address
-     */
     public String startTarget(String targetId, String dockerImage, int exposedPort) {
         try {
-            log.info("Starting target container: {} ({})", targetId, dockerImage);
-
-            // Pull image if not present
+            log.info("Starting container: {} ({})", targetId, dockerImage);
             try {
-                dockerClient.pullImageCmd(dockerImage)
-                        .start()
-                        .awaitCompletion();
-                log.info("Pulled image: {}", dockerImage);
+                dockerClient.pullImageCmd(dockerImage).start().awaitCompletion();
             } catch (Exception e) {
-                log.warn("Could not pull image {} — may already exist: {}", dockerImage, e.getMessage());
+                log.warn("Could not pull image {}: {}", dockerImage, e.getMessage());
             }
 
-            // Create container
             CreateContainerResponse container = dockerClient.createContainerCmd(dockerImage)
-                    .withName("agentzero-target-" + targetId + "-" + System.currentTimeMillis())
+                    .withName("agentzero-" + targetId + "-" + System.currentTimeMillis())
                     .withExposedPorts(ExposedPort.tcp(exposedPort))
                     .withHostConfig(HostConfig.newHostConfig()
                             .withNetworkMode("bridge")
                             .withPortBindings(new Ports(
                                     ExposedPort.tcp(exposedPort),
-                                    Ports.Binding.bindPort(exposedPort)
-                            )))
+                                    Ports.Binding.bindPort(exposedPort))))
                     .exec();
 
             String containerId = container.getId();
             dockerClient.startContainerCmd(containerId).exec();
 
-            // Get container IP
-            String ip = dockerClient.inspectContainerCmd(containerId)
-                    .exec()
-                    .getNetworkSettings()
-                    .getNetworks()
-                    .values()
-                    .stream()
-                    .findFirst()
+            String ip = dockerClient.inspectContainerCmd(containerId).exec()
+                    .getNetworkSettings().getNetworks().values()
+                    .stream().findFirst()
                     .map(ContainerNetwork::getIpAddress)
                     .orElse("127.0.0.1");
 
             runningContainers.put(targetId, containerId);
-            log.info("Target started | id={} container={} ip={}", targetId, containerId, ip);
+            log.info("Container started: {} at {}", containerId, ip);
             return ip;
 
         } catch (Exception e) {
-            log.error("Failed to start target {}: {}", targetId, e.getMessage());
-            throw new RuntimeException("Failed to start Docker target: " + e.getMessage(), e);
+            log.error("Failed to start container {}: {}", targetId, e.getMessage());
+            throw new RuntimeException("Docker start failed: " + e.getMessage(), e);
         }
     }
 
-    /**
-     * Stop and remove a target container
-     */
     public void stopTarget(String targetId) {
         String containerId = runningContainers.get(targetId);
         if (containerId != null) {
@@ -105,19 +87,11 @@ public class DockerManager {
                 dockerClient.stopContainerCmd(containerId).exec();
                 dockerClient.removeContainerCmd(containerId).exec();
                 runningContainers.remove(targetId);
-                log.info("Target stopped and removed: {}", targetId);
+                log.info("Container stopped: {}", targetId);
             } catch (Exception e) {
-                log.error("Failed to stop target {}: {}", targetId, e.getMessage());
+                log.error("Failed to stop container {}: {}", targetId, e.getMessage());
             }
         }
-    }
-
-    /**
-     * Reset a target container (stop + restart fresh)
-     */
-    public String resetTarget(String targetId, String dockerImage, int port) {
-        stopTarget(targetId);
-        return startTarget(targetId, dockerImage, port);
     }
 
     public boolean isDockerAvailable() {

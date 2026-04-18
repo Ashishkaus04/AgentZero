@@ -14,7 +14,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,114 +34,112 @@ public class AgentEngine {
     @Value("${agentzero.agent.step-delay-ms}")
     private long stepDelayMs;
 
-    /**
-     * Main ReAct loop — runs asynchronously
-     * THINK → ACT → OBSERVE → THINK → ACT → OBSERVE → ... → DONE
-     */
+    // Add this helper method to AgentEngine.java
+    private LLMResponse reasonWithRetry(String systemPrompt, List<ConversationTurn> history) {
+        int maxRetries = 3;
+        for (int i = 0; i < maxRetries; i++) {
+            try {
+                return llmService.reason(systemPrompt, history);
+            } catch (RuntimeException e) {
+                if (e.getMessage().contains("429") && i < maxRetries - 1) {
+                    log.warn("Rate limited, waiting 60s before retry {}/{}", i + 1, maxRetries);
+                    try { Thread.sleep(60000); } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                } else {
+                    throw e;
+                }
+            }
+        }
+        throw new RuntimeException("Max retries exceeded");
+    }
+
     @Async
     public void runPentest(String sessionId, String targetIp, int targetPort) {
-        log.info("AgentZero starting pentest | session={} target={}:{}", sessionId, targetIp, targetPort);
-
+        log.info("AgentZero starting | session={} target={}:{}", sessionId, targetIp, targetPort);
         sessionManager.updateStatus(sessionId, "RUNNING");
         eventPublisher.publishSessionStart(sessionId, targetIp, targetPort);
 
-        // Build system prompt with tool manifest
-        String targetInfo = "IP: " + targetIp + "\nPort: " + targetPort;
         String systemPrompt = promptBuilder.build(
                 toolRegistry.buildToolManifest(),
-                targetInfo
-        );
+                "IP: " + targetIp + "\nPort: " + targetPort);
 
         List<ConversationTurn> history = new ArrayList<>();
         String currentUserMessage = promptBuilder.buildInitialMessage(targetIp, targetPort);
-
         int step = 0;
 
         try {
             while (step < maxSteps) {
                 step++;
+
+                // Check if stopped by user
+                if (sessionManager.isStopped(sessionId)) {
+                    eventPublisher.publishStopped(sessionId);
+                    return;
+                }
+
                 log.info("ReAct step {}/{} | session={}", step, maxSteps, sessionId);
 
-                // ── THINK ────────────────────────────────────────
-                eventPublisher.publishThink(sessionId, step, "Reasoning about next action...");
+                // ── THINK ──────────────────────────────────────────
+                LLMResponse response = reasonWithRetry(systemPrompt,
+                        buildHistoryWithCurrent(history, currentUserMessage));
 
-                LLMResponse response = llmService.reason(systemPrompt, 
-                    buildHistoryWithCurrent(history, currentUserMessage));
-
-                // Save THINK step
                 sessionManager.saveStep(sessionId, step, "THINK",
                         response.reasoning() + "\n" + response.thought(), null);
-
                 eventPublisher.publishThink(sessionId, step, response.reasoning());
 
-                // ── CHECK IF DONE ────────────────────────────────
+                // ── DONE ───────────────────────────────────────────
                 if (response.type() == ResponseType.DONE) {
-                    log.info("Agent declared DONE at step {} | session={}", step, sessionId);
-                    sessionManager.saveStep(sessionId, step, "THINK",
-                            "ASSESSMENT COMPLETE: " + response.summary(), null);
+                    log.info("Agent DONE at step {} | session={}", step, sessionId);
                     eventPublisher.publishDone(sessionId, response.summary());
                     sessionManager.complete(sessionId, response.summary());
                     return;
                 }
 
-                // ── ACT ──────────────────────────────────────────
+                // ── ACT ────────────────────────────────────────────
                 if (response.type() == ResponseType.ACT && response.toolCall() != null) {
                     String toolName = response.toolCall().getToolName();
                     String params = response.toolCall().getParameters();
 
-                    log.info("Agent calling tool: {} | session={}", toolName, sessionId);
+                    log.info("Calling tool: {} | session={}", toolName, sessionId);
                     eventPublisher.publishAct(sessionId, step, toolName, params);
-
                     sessionManager.saveStep(sessionId, step, "ACT",
-                            "Calling tool: " + toolName + "\nParams: " + params, toolName);
+                            "Tool: " + toolName + " | Params: " + params, toolName);
 
-                    // ── OBSERVE ───────────────────────────────────
+                    // ── OBSERVE ────────────────────────────────────
                     ToolResult result = toolRegistry.execute(toolName, params);
-
-                    log.info("Tool {} completed | success={} | session={}",
-                            toolName, result.isSuccess(), sessionId);
-
                     sessionManager.saveStep(sessionId, step, "OBSERVE",
-                            result.getOutput() != null ? result.getOutput() : result.getError(),
-                            toolName);
-
+                            result.isSuccess() ? result.getOutput() : result.getError(), toolName);
                     eventPublisher.publishObserve(sessionId, step, toolName, result);
-
-                    // Check for vulnerabilities in output and save them
                     sessionManager.extractAndSaveVulnerabilities(sessionId, toolName, result);
 
-                    // Update conversation history
-                    String assistantMsg = "I will use tool: " + toolName;
-                    history.add(new ConversationTurn(currentUserMessage, assistantMsg));
-
-                    // Next user message = observation
-                    currentUserMessage = promptBuilder.buildObservationMessage(
-                            step, toolName,
-                            result.isSuccess() ? result.getOutput() : "ERROR: " + result.getError()
-                    );
+                    // Update conversation
+                    history.add(new ConversationTurn(currentUserMessage, "Using tool: " + toolName));
+                    String output = result.isSuccess() ? result.getOutput() : "ERROR: " + result.getError();
+                    if (output != null && output.length() > 1000) output = output.substring(0, 1000) + "\n...[truncated]";
+                    currentUserMessage = promptBuilder.buildObservationMessage(step, toolName, output);
 
                 } else {
-                    // LLM returned THINK only — keep reasoning
+                    // Pure THINK — push agent to act
                     history.add(new ConversationTurn(currentUserMessage, response.thought()));
-                    currentUserMessage = "Continue your analysis. What tool should you use next? Respond with ACT.";
+                    currentUserMessage = "Continue. Which tool should you use next? Respond with ACT in JSON.";
                 }
 
-                // Throttle to avoid API rate limiting
                 Thread.sleep(stepDelayMs);
             }
 
             // Max steps reached
             log.warn("Max steps reached | session={}", sessionId);
-            eventPublisher.publishDone(sessionId, "Maximum steps reached. Assessment terminated.");
-            sessionManager.complete(sessionId, "Assessment terminated after " + maxSteps + " steps.");
+            eventPublisher.publishDone(sessionId, "Assessment terminated after " + maxSteps + " steps.");
+            sessionManager.complete(sessionId, "Max steps reached.");
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.info("Pentest interrupted | session={}", sessionId);
             sessionManager.updateStatus(sessionId, "STOPPED");
             eventPublisher.publishStopped(sessionId);
         } catch (Exception e) {
-            log.error("Pentest failed | session={} | error={}", sessionId, e.getMessage(), e);
+            log.error("Pentest failed | session={} | {}", sessionId, e.getMessage(), e);
             sessionManager.updateStatus(sessionId, "FAILED");
             eventPublisher.publishError(sessionId, e.getMessage());
         }

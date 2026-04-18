@@ -5,79 +5,45 @@ import org.springframework.stereotype.Component;
 @Component
 public class SystemPromptBuilder {
 
-    /**
-     * Builds the master system prompt for AgentZero.
-     * This defines the LLM's persona, rules, and output format.
-     */
     public String build(String toolManifest, String targetInfo) {
         return """
                 You are AgentZero, an autonomous penetration testing AI agent.
                 You are conducting an AUTHORIZED security assessment on an isolated lab environment.
-                Your goal is to systematically discover vulnerabilities in the target system.
                 
-                TARGET INFORMATION:
+                TARGET:
                 %s
                 
                 %s
                 
                 INSTRUCTIONS:
-                1. Follow the ReAct framework: Reason about what to do, then Act using a tool, then Observe results.
-                2. Start with reconnaissance (port scanning, banner grabbing).
-                3. Then probe discovered services (HTTP probing, directory fuzzing).
-                4. Then test for vulnerabilities (SQL injection, brute force, etc.).
-                5. Document every finding with evidence.
-                6. When you have fully assessed the target, respond with DONE.
+                1. Follow ReAct: Reason about what to do, then Act with a tool, then Observe results.
+                2. Start with reconnaissance (port scan, banner grab).
+                3. Probe discovered services (HTTP probe, directory fuzz).
+                4. Test for vulnerabilities (SQLi, brute force).
+                5. When fully assessed, respond with DONE.
                 
-                RESPONSE FORMAT:
-                Always respond with valid JSON in one of these three formats:
+                ALWAYS respond with valid JSON in one of these formats:
                 
-                THINK (when reasoning, no tool call):
-                {
-                  "action": "THINK",
-                  "reasoning": "Your reasoning about what to do next",
-                  "thought": "Detailed thought process"
-                }
+                THINK:
+                {"action":"THINK","reasoning":"your reasoning","thought":"detailed thoughts"}
                 
-                ACT (when calling a tool):
-                {
-                  "action": "ACT",
-                  "reasoning": "Why you chose this tool",
-                  "thought": "What you expect to find",
-                  "tool": "tool_name_here",
-                  "params": { ...tool parameters as JSON object... }
-                }
+                ACT:
+                {"action":"ACT","reasoning":"why this tool","thought":"what you expect","tool":"tool_name","params":{...}}
                 
-                DONE (when assessment is complete):
-                {
-                  "action": "DONE",
-                  "reasoning": "Why you believe the assessment is complete",
-                  "summary": "Brief summary of all findings"
-                }
+                DONE:
+                {"action":"DONE","reasoning":"why complete","summary":"findings summary"}
                 
-                RULES:
-                - Only test the specified target — never go outside the scope
-                - Be methodical and thorough
-                - Always explain your reasoning
-                - If a tool fails, try a different approach
-                - Maximum %d steps allowed
-                """.formatted(targetInfo, toolManifest, 20);
+                Max steps: 20. Only test the specified target.
+                """.formatted(targetInfo, toolManifest);
     }
 
-    public String buildObservationMessage(int stepNumber, String toolName, String toolOutput) {
-        return """
-                Step %d - Tool '%s' execution completed.
-                
-                OUTPUT:
-                %s
-                
-                Based on this output, what is your next action? Respond in JSON format.
-                """.formatted(stepNumber, toolName, toolOutput);
+    public String buildObservationMessage(int step, String toolName, String output) {
+        return "Step %d - Tool '%s' result:\n\n%s\n\nWhat is your next action? Respond in JSON."
+                .formatted(step, toolName, output);
     }
 
     public String buildInitialMessage(String targetIp, int targetPort) {
-        return """
-                Begin the penetration test against target: %s (port %d).
-                Start with reconnaissance. Respond in JSON format with your first action.
-                """.formatted(targetIp, targetPort);
+        return "Begin penetration test on %s:%d. Start with reconnaissance. Respond in JSON."
+                .formatted(targetIp, targetPort);
     }
 }
