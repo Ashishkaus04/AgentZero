@@ -84,6 +84,13 @@ export default function TargetPanel({ onStart, isRunning, onStop, sessionId }) {
           <span style={styles.sessionVal}>{sessionId.slice(0, 18)}...</span>
         </div>
       )}
+
+      {sessionId && !isRunning && (
+          <a href={`http://localhost:8080/api/reports/${sessionId}`}
+             target="_blank" rel="noopener noreferrer" style={styles.reportBtn}>
+            ⬇ DOWNLOAD PDF REPORT
+          </a>
+      )}
     </div>
   );
 }
@@ -129,4 +136,11 @@ const styles = {
     background: 'var(--bg-void)', borderRadius: 3, border: '1px solid var(--border)' },
   sessionLabel: { fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2 },
   sessionVal: { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--accent)' },
+  reportBtn: {
+    display: 'block', padding: '10px', textAlign: 'center',
+    background: 'transparent', border: '1px solid var(--accent)',
+    borderRadius: 4, color: 'var(--accent)', fontFamily: 'var(--font-mono)',
+    fontSize: 11, letterSpacing: 2, textDecoration: 'none',
+    transition: 'all 0.2s',
+  },
 };
