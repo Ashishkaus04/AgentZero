@@ -23,6 +23,7 @@ dependency-reduced-pom.xml
 *.zip
 *.tar.gz
 *.rar
+zip
 
 # ─── Sensitive Config — MOST IMPORTANT ───────
 application.properties
@@ -45,3 +46,7 @@ Thumbs.db
 
 # ─── Docker local overrides ──────────────────
 docker-compose.override.yml
+
+# ── node modules ──────────────────
+agentzero-frontend/node_modules
+agentzero-frontend/package-lock.json

@@ -34,16 +34,23 @@ public class AgentEngine {
     @Value("${agentzero.agent.step-delay-ms}")
     private long stepDelayMs;
 
-    // Add this helper method to AgentEngine.java
     private LLMResponse reasonWithRetry(String systemPrompt, List<ConversationTurn> history) {
-        int maxRetries = 3;
+        int maxRetries = 5;
+        long[] delays = {10000, 20000, 30000, 45000, 60000}; // escalating waits
+
         for (int i = 0; i < maxRetries; i++) {
             try {
                 return llmService.reason(systemPrompt, history);
             } catch (RuntimeException e) {
-                if (e.getMessage().contains("429") && i < maxRetries - 1) {
-                    log.warn("Rate limited, waiting 60s before retry {}/{}", i + 1, maxRetries);
-                    try { Thread.sleep(60000); } catch (InterruptedException ie) {
+                boolean is503 = e.getMessage() != null && e.getMessage().contains("503");
+                boolean is429 = e.getMessage() != null && e.getMessage().contains("429");
+
+                if ((is503 || is429) && i < maxRetries - 1) {
+                    long wait = delays[i];
+                    log.warn("Gemini unavailable (attempt {}/{}), waiting {}s...",
+                            i + 1, maxRetries, wait / 1000);
+                    try { Thread.sleep(wait); }
+                    catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         throw e;
                     }
@@ -52,7 +59,7 @@ public class AgentEngine {
                 }
             }
         }
-        throw new RuntimeException("Max retries exceeded");
+        throw new RuntimeException("Gemini unavailable after " + maxRetries + " retries");
     }
 
     @Async

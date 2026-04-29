@@ -45,20 +45,53 @@ public class AgentSessionManager {
     public void extractAndSaveVulnerabilities(String sessionId, String toolName, ToolResult result) {
         if (result.getOutput() == null) return;
         String output = result.getOutput().toLowerCase();
+        String evidence = result.getOutput().substring(0, Math.min(300, result.getOutput().length()));
         SessionData s = sessions.get(sessionId);
         if (s == null) return;
 
-        if (output.contains("vulnerable") || output.contains("sql syntax")) {
-            s.vulnerabilities().add(Map.of("name", "SQL Injection", "severity", "HIGH",
-                    "tool", toolName, "evidence", result.getOutput().substring(0, Math.min(300, result.getOutput().length()))));
+        // SQL Injection — only on actual SQL error signatures or confirmed sqli_test hit
+        if (output.contains("sql syntax") || output.contains("mysql_fetch")
+                || output.contains("ora-") || output.contains("sqlstate")
+                || (output.contains("vulnerable with payload") && toolName.equals("sqli_test"))) {
+            addVulnIfNotDuplicate(s, "SQL Injection", "HIGH", toolName, evidence);
         }
-        if (output.contains("valid:") || output.contains("valid credentials")) {
-            s.vulnerabilities().add(Map.of("name", "Weak Credentials", "severity", "CRITICAL",
-                    "tool", toolName, "evidence", result.getOutput().substring(0, Math.min(300, result.getOutput().length()))));
+
+        // Weak credentials — ONLY when brute_force actually finds valid ones (✅ marker)
+        if (output.contains("valid credentials found") || output.contains("✅")
+                || (output.contains("valid:") && !output.contains("no valid"))) {
+            addVulnIfNotDuplicate(s, "Weak/Default Credentials", "CRITICAL", toolName, evidence);
         }
-        if (output.contains("/.env") || output.contains("/.git") || output.contains("/config")) {
-            s.vulnerabilities().add(Map.of("name", "Sensitive File Exposed", "severity", "MEDIUM",
-                    "tool", toolName, "evidence", result.getOutput().substring(0, Math.min(300, result.getOutput().length()))));
+
+        // Sensitive files — only when dir_fuzz finds accessible sensitive paths
+        if (toolName.equals("dir_fuzz") && output.contains("found") && output.contains("paths:")
+                && (output.contains("/.env") || output.contains("/.git")
+                || output.contains("/config") || output.contains("/backup"))) {
+            addVulnIfNotDuplicate(s, "Sensitive File Exposed", "MEDIUM", toolName, evidence);
+        }
+
+        // Directory listing enabled
+        if (output.contains("index of /") || output.contains("directory listing")) {
+            addVulnIfNotDuplicate(s, "Directory Listing Enabled", "MEDIUM", toolName, evidence);
+        }
+
+        // Sensitive admin endpoints exposed
+        if (toolName.equals("dir_fuzz") && output.contains("[200]")
+                && (output.contains("/admin") || output.contains("/phpmyadmin")
+                || output.contains("/actuator/env") || output.contains("/console"))) {
+            addVulnIfNotDuplicate(s, "Sensitive Admin Endpoint Exposed", "HIGH", toolName, evidence);
+        }
+    }
+
+    // Prevents duplicate findings for the same vulnerability name
+    private void addVulnIfNotDuplicate(SessionData s, String name, String severity,
+                                       String toolName, String evidence) {
+        boolean exists = s.vulnerabilities().stream()
+                .anyMatch(v -> name.equals(v.get("name")));
+        if (!exists) {
+            s.vulnerabilities().add(Map.of(
+                    "name", name, "severity", severity,
+                    "tool", toolName, "evidence", evidence));
+            log.info("Vulnerability found: {} [{}] via {}", name, severity, toolName);
         }
     }
 
